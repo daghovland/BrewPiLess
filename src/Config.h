@@ -396,7 +396,7 @@
 
 #elif BOARD == BrewShield
 // default
-#define oneWirePin NODEMCU_PIN_D6  // If oneWirePin is specified, beerSensorPin and fridgeSensorPin are ignored
+#define oneWirePin NODEMCU_PIN_D2  // If oneWirePin is specified, beerSensorPin and fridgeSensorPin are ignored
 #define coolingPin NODEMCU_PIN_D5
 #define heatingPin NODEMCU_PIN_D7
 #if AUTO_CAP
