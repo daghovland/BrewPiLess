@@ -131,6 +131,8 @@ void LcdDisplay::printTemperature(temperature temp){
 	for(int8_t i = 0; i < spacesToWrite ;i++){
 		lcd.write(' ');
 	}
+	Serial.print("Printing tempString: ");
+	Serial.println(tempString);
 	lcd.print(tempString);
 }
 

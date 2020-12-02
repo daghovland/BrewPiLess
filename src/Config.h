@@ -302,20 +302,20 @@
 #define PIN_SCL 22
 
 
-#define oneWirePin    23
+#define oneWirePin    17
 
-#define actuatorPin1  16
-#define actuatorPin2  17
-#define actuatorPin3  19
-#define actuatorPin4  27
-#define actuatorPin5  26
+#define actuatorPin1  25
+#define actuatorPin2  26
+#define actuatorPin3  27
+#define actuatorPin4  15
+#define actuatorPin5  13
 
 #define BuzzPin       18
 
 // 34,35,66,39 input only
 #define rotaryAPin      32
 #define rotaryBPin      33
-#define rotarySwitchPin 25
+#define rotarySwitchPin 29
 
 // Only ADC1 (pin 32~39) is allowed 
 #define PressureAdcPin  36
@@ -418,7 +418,9 @@
 
 #if BREWPI_LCD
 // LCD configurations:
-#if OLED_LCD
+#if TFT_LCD
+#define BREWPI_TFT_LCD 1
+#elif OLED_LCD
 #define BREWPI_OLED128x64_LCD 1
 #else
 #define BREWPI_IIC_LCD 1

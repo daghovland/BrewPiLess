@@ -33,7 +33,10 @@
 #include "IicOledLcd.h"
 #endif
 
-#if BREWPI_OLED128x64_LCD
+#if BREWPI_TFT_LCD
+#include "TFTDisplay.h"
+typedef TFTDisplay LcdDriver;
+#elif BREWPI_OLED128x64_LCD
 	typedef IICOledLcd	LcdDriver;
 #else // BREWPI_OLED128x64_LCD
 #if defined(BREWPI_IIC_LCD)
