@@ -359,7 +359,7 @@
 #define NODEMCU_PIN_D9 3	// Do not use - USB
 #define NODEMCU_PIN_D10 1	// Do not use - USB
 
-#define PIN_SDA NODEMCU_PIN_D2
+#define PIN_SDA NODEMCU_PIN_D5
 #define PIN_SCL NODEMCU_PIN_D1
 
 
@@ -432,11 +432,11 @@
 #elif BOARD == BrewShield
 // default
 #define oneWirePin NODEMCU_PIN_D6  // If oneWirePin is specified, beerSensorPin and fridgeSensorPin are ignored
-#define coolingPin NODEMCU_PIN_D5
-#define heatingPin NODEMCU_PIN_D7
+#define coolingPin NODEMCU_PIN_D0
+#define heatingPin NODEMCU_PIN_D2
 #if AUTO_CAP
-#define doorPin    NODEMCU_PIN_D8
-#define BuzzPin NODEMCU_PIN_D0
+#define doorPin    NODEMCU_PIN_D7
+#define BuzzPin NODEMCU_PIN_D1
 #else
 #define doorPin    NODEMCU_PIN_D4
 #define BuzzPin NODEMCU_PIN_D0
