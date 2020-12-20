@@ -70,15 +70,24 @@ protected:
 	int16_t _rssi;
 	bool _rssiValid;
 
+	#if SupportTiltHydrometer
+	uint16_t _tiltRawGravity;
+	TiltConfiguration * _tcfg;
+	#endif
 
 	GravityDeviceConfiguration *_cfg;
 
 	float temperatureCorrection(float sg, float t, float c);
 
-	void setTilt(float tilt,float temp,time_t now);
+	void setIspindelAngle(float tilt,float temp,time_t now);
 	void setGravity(float sg, time_t now,bool log=true);
 	void setAuxTemperatureCelsius(float temp);
 	void setOriginalGravity(float og);	
+
+	void reconfig(void);
+	#if SupportTiltHydrometer
+	void setTiltInfo(uint16_t gravity, uint16_t temperature, int rssi);
+	#endif
 public:
 	ExternalData(void):_gravity(INVALID_GRAVITY),_auxTemp(INVALID_TEMP),
 	_lastUpdate(0),_deviceVoltage(INVALID_VOLTAGE)
@@ -93,6 +102,8 @@ public:
 	void setCalibrating(bool cal){ _calibrating=cal;}
 	//configuration reading
     bool iSpindelEnabled(void);
+    bool gravityDeviceEnabled(void);
+
 	float hydrometerCalibration(void);
 
     void sseNotify(char *buf);
@@ -107,6 +118,8 @@ public:
 	float auxTemp(void){return _auxTemp; }
 //	void setUpdateTime(time_t update){ _lastUpdate=update;}
 	time_t lastUpdate(void){return _lastUpdate;}
+	int16_t rssi(void){return _rssiValid? _rssi:-999;}
+	
 	void setDeviceVoltage(float vol){ _deviceVoltage = vol; }
 	void setDeviceRssi(int16_t rssi){_rssi = rssi;  _rssiValid=true;}
 	float deviceVoltage(void){return _deviceVoltage;}

@@ -3,8 +3,13 @@
 #include <FS.h>
 
 #if defined(ESP32)
+#if UseLittleFS
+#include <LittleFS.h>
+#else
 #include <SPIFFS.h>
 #endif
+#endif
+extern FS& FileSystem;
 
 #include "BPLSettings.h"
 #include "TimeKeeper.h"
@@ -19,8 +24,6 @@
 
 #define LogBufferSize 1024
 // Log tags
-#define StartLogTag 0xFF
-#define ResumeBrewTag 0xFE
 
 #define PeriodTag 0xF0
 #define StateTag 0xF1
@@ -38,12 +41,22 @@
 
 #define SpecificGravityTag 0xFB
 
+#define HumidityTag 0xFC
+#define HumiditySetTag 0xFD
+
+#define ResumeBrewTag 0xFE
+#define StartLogTag 0xFF
+
+
 #define INVALID_TEMP_INT 0x7FFF
 #define INVALID_GRAVITY_INT 0x7FFF
 
 #define VolatileDataHeaderSize 7
-
+#if EnableDHTSensorSupport
+#define VolatileHeaderSize ( VolatileDataHeaderSize*2 + 18)
+#else
 #define VolatileHeaderSize ( VolatileDataHeaderSize*2 + 16)
+#endif
 
 #define OrderBeerSet 0
 #define OrderBeerTemp 1
@@ -156,6 +169,13 @@ private:
 	FileIndexes *_pFileInfo;
 	uint8_t _targetPsi;
 
+#if EnableDHTSensorSupport	
+	uint8_t _lastHumidity;
+	uint8_t _savedHumidityValue;
+	uint8_t _lastHumidityTarget;
+	uint8_t _savedHumidityTarget;
+#endif
+
 	uint16_t  _headData[VolatileDataHeaderSize];
 
 	void _resetTempData(void);
@@ -174,6 +194,10 @@ private:
 	void _addOgRecord(uint16_t og);
 	void _addSgRecord(uint16_t sg);
 	void _addGravityRecord(bool isOg, uint16_t gravity);
+#if EnableDHTSensorSupport	
+	void _addHumidityRecord(uint8_t humidity);
+	void _addHumidityTargetRecord(uint8_t target);
+#endif
 
 	void _addModeRecord(char mode);
 	uint32_t _addResumeTag(void);

@@ -167,10 +167,11 @@
                 t.reqdata();
             }, t.chart.interval * 1000);
         },
-        init: function(id, y1, y2,id2,pl,carbonation) {
+        init: function(id, y1, y2,id2,pl,carbonation,id3,rhLabel) {
             this.chart = new BrewChart(id);
             this.chart.setLabels(y1, y2);
             if(typeof id2 != "undefined") this.chart.setPChart(id2,pl,carbonation)
+            if(typeof id3 != "undefined") this.chart.setHChart(id3,rhLabel);
         },
     timer: null,
         start: function() {
@@ -397,6 +398,30 @@
 
     function gravityDevice(msg) {
 
+        if(typeof msg["dev"] != "undefined"){
+            if(msg.dev ==1){ //ispindel
+                Q(".gravity-device-pane").style.display="block";
+                doAll(".ispindel-info",function(d){
+                    d.style.display="block";
+                });
+
+                doAll(".tilt-info",function(d){
+                    d.style.display="none";
+                });
+
+            }else if(msg.dev ==2){
+                Q(".gravity-device-pane").style.display="block";
+                doAll(".ispindel-info",function(d){
+                    d.style.display="none";
+                });
+                doAll(".tilt-info",function(d){
+                    d.style.display="block";
+                });
+
+            }else{
+                Q(".gravity-device-pane").style.display="none";
+            }
+        }
         //if (typeof msg["name"] == "undefined") return;
         if (typeof msg["plato"] != "undefined") {
             window.plato = msg.plato;
@@ -405,6 +430,7 @@
         if (typeof msg["fpt"] != "undefined") {
             window.npt = msg["fpt"];
         }
+
         // before iSpindel report to BPL, the name file is "unknown"
         if (typeof msg["name"] == "undefined") return
             //The first report will be "unknown" if (msg.name.startsWith("iSpindel")) {
@@ -422,16 +448,15 @@
         var ndiv = Q("#iSpindel-name");
         if (ndiv) ndiv.innerHTML = msg.name;
 
-        if (typeof msg["battery"] != "undefined" && Q("#iSpindel-battery"))
+        if (typeof msg["battery"] != "undefined" && Q("#iSpindel-battery")
+            && msg.battery > 0)
             Q("#iSpindel-battery").innerHTML = msg.battery;
 
-        var lu;
-        if (typeof msg["lu"] != "undefined")
-            lu = new Date(msg.lu * 1000);
-        else
-            lu = new Date();
-        if (Q("#iSpindel-last"))
-            Q("#iSpindel-last").innerHTML = lu.shortLocalizedString();
+        if(msg.lu > 84879460){
+          var lu = (typeof msg["lu"] != "undefined")? new Date(msg.lu * 1000):new Date();
+            if (Q("#gravity-device-last"))
+                Q("#gravity-device-last").innerHTML = lu.shortLocalizedString();
+        }
 
         if (!BChart.chart.calibrating && typeof msg["sg"] != "undefined" &&
             msg.sg > 0)
@@ -442,9 +467,9 @@
                 Q("#iSpindel-tilt").innerHTML = "" + msg["angle"];
         }
         if (typeof msg["rssi"] != "undefined"){
-            if(Q("#ispindel-rssi")){
-                Q("#ispindel-rssi").classList.remove("no-display");
-                wifibar("#ispindel-rssi",msg.rssi);
+            if(Q("#gravity-device-rssi")){
+                Q("#gravity-device-rssi").classList.remove("no-display");
+                wifibar("#gravity-device-rssi",msg.rssi);
             }
         }
         //}
@@ -580,8 +605,8 @@
         showgravitydlg("og");
     }
 
-    function wifibar(did,x){
-        var strength = [-1000, -90, -80, -70, -67];
+    function wifibar(did,x,ble){
+        var strength =(typeof ble =="undefined")? [-1000, -90, -80, -70, -67]:[-1000,-80,-70,-60];
         var bar = 4;
         for (; bar >= 0; bar--) {
             if (strength[bar] < x) break;
@@ -666,6 +691,19 @@
             units[i].style.display = "inline-block";
         }
     }
+    
+    function gravityInfo(info){
+        // gravity, rssi, 
+        if(Q("#gravity-device-rssi")) wifibar("#gravity-device-rssi",info.r);
+        // last update
+        if(info.u> 84879460){
+            var lu = new Date(info.u * 1000);
+            if (Q("#gravity-device-last")) Q("#gravity-device-last").innerHTML = lu.shortLocalizedString();
+        }
+        // gravity
+        if(info.g > -1) updateGravity(window.plato? BrewMath.sg2pla(info.g/1000.0):info.g/1000.0);
+        if(info.t > -20000) Q("#gravity-device-temp").innerHTML= info.t/100 + "&deg;" + window.tempUnit;
+    }
 
     function BPLMsg(c) {
         BWF.gotMsg = true;
@@ -709,8 +747,13 @@
                 Q("#pressure-psi").innerHTML = c.psi;
             }
         }
+        if(typeof c["G"] != "undefined") gravityInfo(c.G);
 
         ptcshow(c);
+        if(typeof c["h"] != "undefined") {
+            Q("#humidity-info").style.display="";
+            Q("#humidity").innerHTML= (c.h <=100)?  (c.h + "%"):"--";
+        }
     }
 
     function connBWF() {
@@ -789,8 +832,9 @@
 
     function init() {
         Q("#pressure-info-pane").style.display = "none";
+        Q(".gravity-device-pane").style.display = "none";
         window.plato = false;
-        BChart.init("div_g", Q('#ylabel').innerHTML, Q('#y2label').innerHTML,"div_p",Q('#psilabel').innerHTML,Q('#vollabel').innerHTML);
+        BChart.init("div_g", Q('#ylabel').innerHTML, Q('#y2label').innerHTML,"div_p",Q('#psilabel').innerHTML,Q('#vollabel').innerHTML,"div_h",Q("#rhlabel").innerHTML);
         initRssi();
         Capper.init();
         BWF.gotMsg = true;

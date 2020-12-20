@@ -65,7 +65,7 @@
 // Enable DS2413 Actuators.
 //
 // #ifndef BREWPI_DS2413
-// #define BREWPI_DS2413 0
+ #define BREWPI_DS2413 true
 // #endif
 //
 //////////////////////////////////////////////////////////////////////////
@@ -79,6 +79,18 @@
 #endif
 //
 //////////////////////////////////////////////////////////////////////////
+
+
+//////////////////////////////////////////////////////////////////////////
+//
+// Enable humidity sensor
+//
+#ifndef EnableDHTSensorSupport
+#define EnableDHTSensorSupport true
+#endif
+//
+//////////////////////////////////////////////////////////////////////////
+
 
 //////////////////////////////////////////////////////////////////////////
 //
@@ -272,11 +284,21 @@
 #define SettableMinimumCoolTime true
 //#endif
 
+#ifndef UseLittleFS
+
+#if ESP32
+#define UseLittleFS false
+#else
+#define UseLittleFS false
+#endif
+
+#endif
+
 #if ESP32
 #define FS_EEPROM true
 #endif
 
-#define BPL_VERSION "4.0"
+#define BPL_VERSION "4.1"
 
 //////////////////////////////////////////////////////////////////////////
 //
@@ -345,12 +367,20 @@
 // define this option to disable webserver.
 #define SONOFF true 
 
+#if SONOFF_USE_AM2301
+// free up pin 14, so that it can be assigned to AM2301
+#define oneWirePin NODEMCU_PIN_D7  
+#define doorPin    NODEMCU_PIN_D5
+
+#else
 #define oneWirePin NODEMCU_PIN_D5  // If oneWirePin is specified, beerSensorPin and fridgeSensorPin are ignored
+#define doorPin    NODEMCU_PIN_D7
+#endif
+
 #define coolingPin NODEMCU_PIN_D6
 #define heatingPin NODEMCU_PIN_D0
-#define doorPin    NODEMCU_PIN_D7
 #define BuzzPin NODEMCU_PIN_D3
-
+/*
 // NO LCD, NO BUTTONs
 #ifdef BREWPI_LCD
 #undef BREWPI_LCD 
@@ -365,11 +395,15 @@
 #undef EanbleParasiteTempControl
 #define EanbleParasiteTempControl flase
 #undef SupportPressureTransducer
-#define SupportPressureTransducer false
+//#define SupportPressureTransducer false
 #undef SupportMqttRemoteControl
 #define SupportMqttRemoteControl false
 #undef AUTO_CAP
 #define  AUTO_CAP false
+
+#undef UseLittleFS 
+#define UseLittleFS false
+
 #ifdef NO_SPIFFS
     #undef DEVELOPMENT_OTA 
     #define DEVELOPMENT_OTA true
@@ -382,6 +416,7 @@
     #define DEVELOPMENT_FILEMANAGER false
 #endif
 
+*/
 
 #elif BOARD == Thorrak_PCB
 #define oneWirePin NODEMCU_PIN_D6  // If oneWirePin is specified, beerSensorPin and fridgeSensorPin are ignored
@@ -502,6 +537,9 @@
 
 #define EMIWorkaround 1
 
+#if ESP32
+#define SupportTiltHydrometer true
+#endif
 /**************************************************************************************/
 /*  Configuration: 																	  */
 /*  Only one setting: the serial used to connect to.                                  */

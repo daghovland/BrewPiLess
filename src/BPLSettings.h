@@ -33,21 +33,41 @@ typedef struct _TimeInformation{
 //*****************************************************
 // gravity device
 //  36
+#define GravityDeviceNone 0
+#define GravityDeviceIspindel 1
+#define GravityDeviceTilt 2
+
 typedef struct _GravityDeviceConfiguration{
     float ispindelCoefficients[4];
     float   lpfBeta;
 	uint32_t  numberCalPoints;
     
-    uint8_t  ispindelEnable;
+    uint8_t  gravityDeviceType;
     uint8_t  ispindelTempCal;
     uint8_t  calculateGravity;
     uint8_t  ispindelCalibrationBaseTemp;
 
 	uint8_t  stableThreshold;
 	uint8_t  usePlato;
-    uint8_t _padding[6];
+    uint8_t  _padding[6];
 }GravityDeviceConfiguration;
 
+
+#if SupportTiltHydrometer
+typedef  struct _TiltCalibrationPoint{
+        uint16_t rawsg;
+        uint16_t calsg;
+} TiltCalibrationPoint;
+
+typedef struct _TiltConfiguratoin{
+    float coefficients[4];
+    TiltCalibrationPoint  calibrationPoints[6];
+    uint8_t  numCalPoints;
+    uint8_t  tiltColor;
+    uint8_t  _padding[10];
+} TiltConfiguration;
+
+#endif
 //*****************************************************
 // Beer Profile
 
@@ -240,6 +260,32 @@ typedef struct _WiFiConfiguration{
 #endif
 
 //####################################################
+/* HumidityControl */
+// 28 bytes
+
+typedef struct _HumidityControlSettings{
+    uint8_t  mode;
+    uint8_t  target;
+    uint8_t  idleLow;
+    uint8_t  idleHigh;
+    uint8_t  humidifyingTargetHigh;
+    uint8_t  dehumidifyingTargetLow;
+    uint8_t  _reserved0;
+    uint8_t  _reserved1;
+
+    uint16_t minHumidifyingIdleTime;
+    uint16_t minHumidifyingRunningTime;
+    uint16_t minDehumidifyingIdleTime;
+    uint16_t minDehumidifyingRunningTime;
+    uint16_t minDeadTime;
+    uint8_t  _reserved2;
+    uint8_t  _reserved3;
+
+    uint8_t  _reserved4[8];
+} HumidityControlSettings;
+
+
+//####################################################
 // whole structure
 struct Settings{
     SystemConfiguration syscfg; //0:156
@@ -260,6 +306,12 @@ struct Settings{
 #endif
 #ifdef SaveWiFiConfiguration
     WiFiConfiguration wifiConfiguration;
+#endif
+#if SupportTiltHydrometer
+    TiltConfiguration tiltConfiguration;
+#endif
+#if EnableDHTSensorSupport
+    HumidityControlSettings humidityControl;
 #endif
 };
 
@@ -328,6 +380,15 @@ public:
     }
 #endif
 
+#if SupportTiltHydrometer
+    TiltConfiguration* tiltConfiguration(void){ return & _data.tiltConfiguration;}
+#endif
+
+
+#if EnableDHTSensorSupport
+    HumidityControlSettings* humidityControlSettings(void){ return & _data.humidityControl;}
+#endif
+
 protected:
     Settings _data;
 
@@ -342,6 +403,9 @@ protected:
     void defaultAutoCapSettings(void);
 #if EanbleParasiteTempControl   
     void defaultParasiteTempControlSettings(void);
+#endif
+#if EnableDHTSensorSupport
+    void defaultHumidityControlSettings(void);
 #endif
 };
 

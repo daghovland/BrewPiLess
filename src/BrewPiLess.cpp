@@ -8,10 +8,8 @@
 #include <ArduinoOTA.h>
 #include <FS.h>
 
-//#include <Hash.h>
 #if defined(ESP32)
 #include <AsyncTCP.h>
-#include <SPIFFS.h>
 #else
 #include <ESPAsyncTCP.h>
 #endif
@@ -87,7 +85,20 @@ extern "C" {
 #endif
 
 #if SupportTiltHydrometer
-#include "TiltReceiver.h"
+#include "TiltListener.h"
+#endif
+
+
+#if UseLittleFS
+#include <LittleFS.h>
+#else
+#if defined(ESP32)
+#include <SPIFFS.h>
+#endif
+#endif
+
+#if EnableDHTSensorSupport
+#include "HumidityControl.h"
 #endif
 
 //WebSocket seems to be unstable, at least on iPhone.
@@ -164,6 +175,8 @@ extern "C" {
 #define PRESSURE_PATH "/psi"
 #endif
 
+#define HUMIDITY_CONTROL_PATH "/rh"
+
 const char *public_list[]={
 "/bwf.js",
 "/brewing.json"
@@ -173,6 +186,13 @@ const char *nocache_list[]={
 "/brewing.json",
 "/brewpi.cfg"
 };
+
+#if UseLittleFS
+FS& FileSystem = LittleFS;
+#else
+FS& FileSystem =SPIFFS;
+#endif
+
 //*******************************************
 
 	String getContentType(String filename){
@@ -210,16 +230,20 @@ AsyncEventSource sse(SSE_PATH);
 extern const uint8_t* getEmbeddedFile(const char* filename,bool &gzip, unsigned int &size);
 
 void requestRestart(bool disc);
+void tiltScanResult(String& result);
 
 void initTime(bool apmode)
 {
-	if(apmode){
+/*	if(apmode){
 		DBG_PRINTF("initTime in ap mode\n");
 		TimeKeeper.begin();
 	}else{
 		DBG_PRINTF("connect to Time server\n");
 		TimeKeeper.begin((char*)"time.google.com",(char*)"pool.ntp.org",(char*)"time.windows.com");
 	}
+*/
+	TimeKeeper.begin((char*)"time.google.com",(char*)"pool.ntp.org",(char*)"time.windows.com");
+
 }
 #if AUTO_CAP
 void capStatusReport(void);
@@ -230,7 +254,7 @@ class BrewPiWebHandler: public AsyncWebHandler
 		if(request->hasParam("dir",true)){
         	String path = request->getParam("dir",true)->value();
 			#if defined(ESP32)
-			File dir = SPIFFS.open(path);
+			File dir = FileSystem.open(path);
           	String output = "[";
 			if(dir.isDirectory()){
 				File entry = dir.openNextFile();
@@ -241,7 +265,11 @@ class BrewPiWebHandler: public AsyncWebHandler
             		output += "{\"type\":\"";
             		output += (isDir)?"dir":"file";
             		output += "\",\"name\":\"";
+					#if UseLittleFS
+					output += String(entry.name());
+					#else
             		output += String(entry.name()).substring(1);
+					#endif
             		output += "\"}";
             		entry.close();
 					entry = dir.openNextFile();
@@ -253,7 +281,7 @@ class BrewPiWebHandler: public AsyncWebHandler
 
 
 			#else
-          	Dir dir = SPIFFS.openDir(path);
+          	Dir dir = FileSystem.openDir(path);
           	path = String();
           	String output = "[";
           	while(dir.next()){
@@ -263,7 +291,11 @@ class BrewPiWebHandler: public AsyncWebHandler
             		output += "{\"type\":\"";
             		output += (isDir)?"dir":"file";
             		output += "\",\"name\":\"";
+					#if UseLittleFS
+            		output += String(entry.name());
+					#else
             		output += String(entry.name()).substring(1);
+					#endif
             		output += "\"}";
             		entry.close();
           	}
@@ -281,7 +313,7 @@ class BrewPiWebHandler: public AsyncWebHandler
 			#if !defined(ESP32)
         	ESP.wdtDisable(); 
 			#endif
-			SPIFFS.remove(request->getParam("path", true)->value()); 
+			FileSystem.remove(request->getParam("path", true)->value()); 
 			#if !defined(ESP32)
 			ESP.wdtEnable(10);
 			#endif
@@ -297,7 +329,7 @@ class BrewPiWebHandler: public AsyncWebHandler
         	ESP.wdtDisable();
 			#endif
     		String file=request->getParam("path", true)->value();
-    		File fh= SPIFFS.open(file, "w");
+    		File fh= FileSystem.open(file, "w");
     		if(!fh){
     			request->send(500);
     			return;
@@ -316,20 +348,20 @@ class BrewPiWebHandler: public AsyncWebHandler
 
     bool fileExists(String path)
     {
-	    if(SPIFFS.exists(path)) return true;
+	    if(FileSystem.exists(path)) return true;
 	    bool dum;
 	    unsigned int dum2;
 
 	    if(getEmbeddedFile(path.c_str(),dum,dum2)) return true;
-		if(path.endsWith(CHART_LIB_PATH) && SPIFFS.exists(CHART_LIB_PATH)) return true;
+		if(path.endsWith(CHART_LIB_PATH) && FileSystem.exists(CHART_LIB_PATH)) return true;
 		// safari workaround.
 		if(path.endsWith(".js")){
 			String pathWithJgz = path.substring(0,path.lastIndexOf('.')) + ".jgz";
 			 //DBG_PRINTF("checking with:%s\n",pathWithJgz.c_str());
-			 if(SPIFFS.exists(pathWithJgz)) return true;
+			 if(FileSystem.exists(pathWithJgz)) return true;
 		}
 		String pathWithGz = path + ".gz";
-		if(SPIFFS.exists(pathWithGz)) return true;
+		if(FileSystem.exists(pathWithGz)) return true;
 		return false;
     }
 
@@ -355,8 +387,8 @@ class BrewPiWebHandler: public AsyncWebHandler
 		//workaround for safari
 		if(path.endsWith(".js")){
 			String pathWithJgz = path.substring(0,path.lastIndexOf('.')) + ".jgz";
-			if(SPIFFS.exists(pathWithJgz)){
-				AsyncWebServerResponse * response = request->beginResponse(SPIFFS, pathWithJgz,"application/javascript");
+			if(FileSystem.exists(pathWithJgz)){
+				AsyncWebServerResponse * response = request->beginResponse(FileSystem, pathWithJgz,"application/javascript");
 				response->addHeader("Content-Encoding", "gzip");
 				response->addHeader("Cache-Control","max-age=2592000");
 				request->send(response);
@@ -365,12 +397,12 @@ class BrewPiWebHandler: public AsyncWebHandler
 			}
 		}
 		String pathWithGz = path + String(".gz");
-		if(SPIFFS.exists(pathWithGz)){
+		if(FileSystem.exists(pathWithGz)){
 #if 0
-			AsyncWebServerResponse * response = request->beginResponse(SPIFFS, pathWithGz,getContentType(path));
+			AsyncWebServerResponse * response = request->beginResponse(FileSystem, pathWithGz,getContentType(path));
 			// AsyncFileResonse will add "content-disposion" header, result in "download" of Safari, instead of "render" 
 #else
-			File file=SPIFFS.open(pathWithGz,"r");
+			File file=FileSystem.open(pathWithGz,"r");
 			if(!file){
 				request->send(500);
 				return;
@@ -383,8 +415,8 @@ class BrewPiWebHandler: public AsyncWebHandler
 			return;
 		}
 		  
-		if(SPIFFS.exists(path)){
-			//request->send(SPIFFS, path);
+		if(FileSystem.exists(path)){
+			//request->send(FileSystem, path);
 			bool nocache=false;
 			for(byte i=0;i< sizeof(nocache_list)/sizeof(const char*);i++){
 				if(path.equals(nocache_list[i])){
@@ -394,7 +426,7 @@ class BrewPiWebHandler: public AsyncWebHandler
 			}
 
 
-			AsyncWebServerResponse *response = request->beginResponse(SPIFFS, path);
+			AsyncWebServerResponse *response = request->beginResponse(FileSystem, path);
 			if(nocache)
 				response->addHeader("Cache-Control","no-cache");
 			else
@@ -680,6 +712,21 @@ public:
 			}
 		}
 		#endif
+		#if EnableDHTSensorSupport
+		else if(request->url() == HUMIDITY_CONTROL_PATH){
+			if(request->hasParam("m",true) &&  request->hasParam("t",true) ){
+				uint8_t mode=(uint8_t) request->getParam("m",true)->value().toInt();
+				uint8_t target=(uint8_t) request->getParam("t",true)->value().toInt();
+				humidityControl.setMode(mode);
+				humidityControl.setTarget(target);
+				theSettings.save();
+				request->send(200,"application/json","{}");
+			}else{
+				request->send(404);
+				DBG_PRINTF("missing parameter:m =%d, t=%d\n",request->hasParam("m",true), request->hasParam("t",true) );
+			}
+		}
+		#endif
 		else if(request->url() == BEER_PROFILE_PATH){
 			if(request->method() == HTTP_GET){
 				request->send(200,"application/json",theSettings.jsonBeerProfile());
@@ -707,7 +754,7 @@ public:
 	 		if(request->url().equals("/")){
 				SystemConfiguration *syscfg=theSettings.systemConfiguration();
 		 		if(!syscfg->passwordLcd){
-		 			sendFile(request,path); //request->send(SPIFFS, path);
+		 			sendFile(request,path); //request->send(FileSystem, path);
 		 			return;
 		 		}
 		 	}
@@ -724,7 +771,7 @@ public:
 	 	    if(syscfg->passwordLcd && !request->authenticate(syscfg->username, syscfg->password))
 	        return request->requestAuthentication();
 
-	 		sendFile(request,path); //request->send(SPIFFS, path);
+	 		sendFile(request,path); //request->send(FileSystem, path);
 		}
 	 }
 
@@ -757,7 +804,7 @@ public:
 				String path=request->url();
 	 			if(path.endsWith("/")) path +=DEFAULT_INDEX_FILE;
 	 			//DBG_PRINTF("request:%s\n",path.c_str());
-				if(fileExists(path)) return true; //if(SPIFFS.exists(path)) return true;
+				if(fileExists(path)) return true; //if(FileSystem.exists(path)) return true;
 				//DBG_PRINTF("request:%s not found\n",path.c_str());
 			}
 	 	}else if(request->method() == HTTP_DELETE && request->url() == DELETE_PATH){
@@ -780,6 +827,9 @@ public:
 			 	#endif
 				#if SupportPressureTransducer
 				|| request->url() == PRESSURE_PATH
+				#endif
+				#if EnableDHTSensorSupport
+				|| request->url() == HUMIDITY_CONTROL_PATH
 				#endif
 	 			)
 	 			return true;
@@ -823,35 +873,40 @@ AppleCNAHandler appleCNAHandler;
 
 
 #if AUTO_CAP
-String capControlStatus(void)
-{
+
+void capControlStatusJson(JsonObject& obj){
+	
 	uint8_t mode=autoCapControl.mode();
-	bool capped = autoCapControl.isCapOn();
-	String 	capstate=String("\"m\":") + String((int)mode) + String(",\"c\":") + String(capped);
+	obj["m"] = mode;
+	obj["c"] = autoCapControl.isCapOn()? 1:0;
 
 	if(mode == AutoCapModeGravity){
-		capstate += String(",\"g\":") + String(autoCapControl.targetGravity(),3);
+		obj["g"]=autoCapControl.targetGravity();
 	}else if (mode ==AutoCapModeTime){
-		capstate += String(",\"t\":") + String(autoCapControl.targetTime());
+		obj["t"]=autoCapControl.targetTime();
 	}
 
 #if SupportPressureTransducer
 	PressureMonitorSettings* ps=theSettings.pressureMonitorSettings();
 	if(ps->mode == PMModeControl){
-		capstate += String(",\"pm\":2,\"psi\":") + String(ps->psi);
+		obj["pm"]=2;
+		obj["psi"]= ps->psi;
 	}
 #endif
 
-	return capstate;
-} 
+}
+
 void stringAvailable(const char*);
 void capStatusReport(void)
 {
-	char buf[128];
-	String capstate= capControlStatus();
 
-	sprintf(buf,"A:{\"cap\":{%s}}", capstate.c_str());
-	stringAvailable(buf);
+	DynamicJsonDocument doc(1024);
+	JsonObject cap = doc.createNestedObject("cap");
+	capControlStatusJson(cap);
+
+	String out="A:";
+	serializeJson(doc,out);
+	stringAvailable(out.c_str());
 }
 #endif
 
@@ -859,10 +914,10 @@ void greeting(std::function<void(const char*)> sendFunc)
 {
 	char buf[512];
 	// gravity related info., starting from "G"
-	//if(externalData.iSpindelEnabled()){
+	if(externalData.gravityDeviceEnabled()){
 		externalData.sseNotify(buf);
 		sendFunc(buf);
-	//}
+	} 
 
 	// misc informatoin, including
 
@@ -870,36 +925,36 @@ void greeting(std::function<void(const char*)> sendFunc)
 	const char *logname= brewLogger.currentLog();
 	if(logname == NULL) logname="";
 	SystemConfiguration *syscfg= theSettings.systemConfiguration();
-#if AUTO_CAP
-	String capstate= capControlStatus();
 
+	DynamicJsonDocument doc(1024);
+
+	doc["nn"] = String(syscfg->titlelabel);
+	doc["ver"] =  String(BPL_VERSION);
+	doc["rssi"]= WiFi.RSSI();
+	doc["tm"] = TimeKeeper.getTimeSeconds();
+	doc["off"]= TimeKeeper.getTimezoneOffset();
+	doc["log"] = String(logname);
+
+#if AUTO_CAP
+	JsonObject cap = doc.createNestedObject("cap");
+	capControlStatusJson(cap);
+
+#endif		 
 #if EanbleParasiteTempControl
 	
-	String ptcstate= parasiteTempController.getSettings();
-
-	sprintf(buf,"A:{\"nn\":\"%s\",\"ver\":\"%s\",\"rssi\":%d,\
-				\"tm\":%lu,\"off\":%ld, \"log\":\"%s\",\"cap\":{%s},\"ptcs\":%s}"
-		,syscfg->titlelabel,BPL_VERSION,WiFi.RSSI(),
-		TimeKeeper.getTimeSeconds(),(long int)TimeKeeper.getTimezoneOffset(),
-		logname, capstate.c_str(),ptcstate.c_str());
-
-
-#else
-	sprintf(buf,"A:{\"nn\":\"%s\",\"ver\":\"%s\",\"rssi\":%d,\
-				\"tm\":%lu,\"off\":%ld, \"log\":\"%s\",\"cap\":{%s}}"
-		,syscfg->titlelabel,BPL_VERSION,WiFi.RSSI(),
-		TimeKeeper.getTimeSeconds(),(long int)TimeKeeper.getTimezoneOffset(),
-		logname, capstate.c_str());
-#endif
-	
-#else
-	sprintf(buf,"A:{\"nn\":\"%s\",\"ver\":\"%s\",\"rssi\":%d,\"tm\":%lu,\"off\":%ld, \"log\":\"%s\"}"
-		,syscfg->titlelabel,BPL_VERSION,WiFi.RSSI(),
-		TimeKeeper.getTimeSeconds(),TimeKeeper.getTimezoneOffset(),
-		logname);
+	doc["ptc"]= serialized(parasiteTempController.getSettings());
 #endif
 
-	sendFunc(buf);
+#if EnableDHTSensorSupport
+	JsonObject hum = doc.createNestedObject("rh");
+	hum["m"] = humidityControl.mode();
+	hum["t"] = humidityControl.targetRH();
+#endif
+
+	String out="A:";
+	serializeJson(doc,out);
+
+	sendFunc(out.c_str());
 
 	// beer profile:
 	String profile=String("B:") + theSettings.jsonBeerProfile();
@@ -1033,7 +1088,7 @@ void notifyLogStatus(void)
 
 void reportRssi(void)
 {
-	char buf[256];
+//	char buf[512];
 
 	uint8_t mode, state;
 	char unit;
@@ -1044,63 +1099,50 @@ void reportRssi(void)
 	brewPi.getAllStatus(&state, &mode, &beerTemp, &beerSet, &fridgeTemp, &fridgeSet, &roomTemp);
 	display.getLine(3,statusLine);
 
+	DynamicJsonDocument doc(1024);
+	doc["rssi"]= WiFi.RSSI();
+	doc["st"] = state;
+	doc["md"] = String((char)mode);
+	doc["bt"] = (int)(beerTemp*100);
+	doc["bs"] = (int)(beerSet*100);
+	doc["ft"] = (int)(fridgeTemp*100);
+	doc["fs"] = (int)(fridgeSet*100);
+	doc["rt"] = (int)(roomTemp*100);
+	doc["sl"] = statusLine;
+	doc["tu"] = String(unit);
+
+
 #if EanbleParasiteTempControl
-	char ptcmode=parasiteTempController.getMode();
-	
-	#if SupportPressureTransducer
-		int pmmode=PressureMonitor.mode();
-		int psi = (int) PressureMonitor.currentPsi();
-		
-		sprintf(buf,"A:{\"rssi\":%d,\"ptc\":\"%c\",\"pt\":%u,\"ptctp\":%d,\"ptclo\":%d,\"ptcup\":%d,\
-			\"st\":%d,\"md\":\"%c\",\"bt\":%d,\"bs\":%d,\"ft\":%d,\"fs\":%d,\"rt\":%d,\"sl\":\"%s\",\"tu\":\"%c\",\"pm\":%d,\"psi\":%d}",
-				WiFi.RSSI(),ptcmode,parasiteTempController.getTimeElapsed(),
-				parasiteTempController.getTemp(),parasiteTempController.getLowerBound(),parasiteTempController.getUpperBound(),
-			state,
-			mode,
-			(int)(beerTemp*100),
-			(int)(beerSet*100),
-			(int)(fridgeTemp*100),
-			(int)(fridgeSet*100),
-			(int)(roomTemp*100),
-			statusLine,
-			unit,
-			pmmode,
-			psi
-			);
-
-	#else
-	sprintf(buf,"A:{\"rssi\":%d,\"ptc\":\"%c\",\"pt\":%u,\"ptctp\":%d,\"ptclo\":%d,\"ptcup\":%d,\
-		\"st\":%d,\"md\":\"%c\",\"bt\":%d,\"bs\":%d,\"ft\":%d,\"fs\":%d,\"rt\":%d,\"sl\":\"%s\",\"tu\":\"%c\"}",
-			WiFi.RSSI(),ptcmode,parasiteTempController.getTimeElapsed(),
-			parasiteTempController.getTemp(),parasiteTempController.getLowerBound(),parasiteTempController.getUpperBound(),
-		state,
-		mode,
-		(int)(beerTemp*100),
-		(int)(beerSet*100),
-		(int)(fridgeTemp*100),
-		(int)(fridgeSet*100),
-		(int)(roomTemp*100),
-		statusLine,
-		unit
-
-			);
-	#endif
-	stringAvailable(buf);
-#else
-	sprintf(buf,"A:{\"rssi\":%d,\"st\":%d,\"md\":\"%c\",\"bt\":%d,\"bs\":%d,\"ft\":%d,\"fs\":%d,\"rt\":%d,\"sl\":\"%s\",\"tu\":\"%c\"}",
-		WiFi.RSSI(),
-		state,
-		mode,
-		(int)(beerTemp*100),
-		(int)(beerSet*100),
-		(int)(fridgeTemp*100),
-		(int)(fridgeSet*100),
-		(int)(roomTemp*100),
-		statusLine,
-		unit
-		);
-	stringAvailable(buf);
+	doc["ptc"] = String(parasiteTempController.getMode());
+	doc["pt"] = parasiteTempController.getTimeElapsed();
+	doc["ptctp"] = parasiteTempController.getTemp();
+	doc["ptclo"] = parasiteTempController.getLowerBound();
+	doc["ptcup"] = parasiteTempController.getUpperBound();
 #endif
+
+#if SupportPressureTransducer
+	doc["pm"] = PressureMonitor.mode();
+	doc["psi"] = (int) PressureMonitor.currentPsi();
+#endif
+
+#if EnableDHTSensorSupport
+	if (humidityControl.sensorInstalled()){
+		doc["h"]= humidityControl.humidity();
+	}
+#endif
+
+
+	JsonObject G = doc.createNestedObject("G");
+	G["u"] = externalData.lastUpdate();
+	G["t"] = (int)(externalData.auxTemp() * 100);
+	G["r"] = externalData.rssi();
+	G["g"] = (int)(externalData.gravity() * 1000);
+
+
+	String out="A:";
+	serializeJson(doc,out);
+
+	stringAvailable(out.c_str());
 }
 
 
@@ -1169,8 +1211,8 @@ public:
 				int index=request->getParam("dl")->value().toInt();
 				char buf[36];
 				brewLogger.getFilePath(buf,index);
-				if(SPIFFS.exists(buf)){
-					request->send(SPIFFS,buf,"application/octet-stream",true);
+				if(FileSystem.exists(buf)){
+					request->send(FileSystem,buf,"application/octet-stream",true);
 				}else{
 					request->send(404);
 				}
@@ -1333,7 +1375,20 @@ public:
 #if	SupportTiltHydrometer
 	 	if(request->url() == TiltCommandPath){
 			 if(request->hasParam("scan")){
-				 tiltReceiver.scan(NULL);
+				 DBG_PRINTF("scan BLE\n");
+				 tiltListener.scan([](int count,TiltHydrometerInfo *tilts){
+					String ret="{\"tilts\":[";
+						 for(int i=0;i<count;i++){
+							 ret += String("{\"c\":")+ String(tilts[i].color) +
+							 		String(",\"r\":")+ String(tilts[i].rssi) +
+									String(",\"g\":")+ String(tilts[i].gravity) +
+									String(",\"t\":")+ String(tilts[i].temperature) +
+									((i==count-1)? String("}"): String("},"));
+						 }
+					ret += "]}";
+					tiltScanResult(ret);
+				 });
+				 request->send(200);
 			 }
 			 return;
 		 }
@@ -1545,6 +1600,11 @@ void wiFiEvent(const char* msg){
 		DBG_PRINTF("channel:%d, BSSID:%s\n",WiFi.channel(),WiFi.BSSIDstr().c_str());
 		if(! TimeKeeper.isSynchronized())TimeKeeper.updateTime();
 	}
+}
+
+void tiltScanResult(String& result){
+	String report="T:" + result;
+	stringAvailable(report.c_str());
 }
 //{brewpi
 
@@ -1780,12 +1840,12 @@ void setup(void){
 #if defined(ESP32)
   	if(!SPIFFS.begin(true)){
 #else
-	if(!SPIFFS.begin()){
+	if(!FileSystem.begin()){
 #endif
   		// TO DO: what to do?
-  		DBG_PRINTF("SPIFFS.being() failed!\n");
+  		DBG_PRINTF("FileSystem.begin() failed!\n");
   	}else{
-  		DBG_PRINTF("SPIFFS.being() Success.\n");
+  		DBG_PRINTF("FileSystem.begin() Success.\n");
   	}
 
 
@@ -1819,7 +1879,9 @@ void setup(void){
 	WiFiConfiguration *wifiCon=theSettings.getWifiConfiguration();
 
 	if(strlen(syscfg->hostnetworkname)>0)
-		WiFiSetup.begin(wifiMode,syscfg->hostnetworkname,syscfg->password,wifiCon->ssid,wifiCon->pass);
+		WiFiSetup.begin(wifiMode,syscfg->hostnetworkname,syscfg->password,
+					wifiCon->ssid[0]? wifiCon->ssid:NULL,
+					wifiCon->pass[0]? wifiCon->pass:NULL);
 	else // something wrong with the file
 		WiFiSetup.begin(wifiMode,DEFAULT_HOSTNAME,DEFAULT_PASSWORD);
 #else
@@ -1875,8 +1937,8 @@ void setup(void){
 	webServer->addHandler(&externalDataHandler);
 
 	webServer->addHandler(&networkConfig);
-	//3.1.2 SPIFFS is part of the serving pages
-	//server.serveStatic("/", SPIFFS, "/","public, max-age=259200"); // 3 days
+	//3.1.2 file system is part of the serving pages
+	//server.serveStatic("/", file system, "/","public, max-age=259200"); // 3 days
 
 #if defined(ESP32)
 	webServer->on("/fs",[](AsyncWebServerRequest *request){
@@ -1888,7 +1950,7 @@ void setup(void){
 #else
 	webServer->on("/fs",[](AsyncWebServerRequest *request){
 		FSInfo fs_info;
-		SPIFFS.info(fs_info);
+		FileSystem.info(fs_info);
 		request->send(200,"","totalBytes:" +String(fs_info.totalBytes) +
 		" usedBytes:" + String(fs_info.usedBytes)+" blockSize:" + String(fs_info.blockSize)
 		+" pageSize:" + String(fs_info.pageSize)
@@ -1927,7 +1989,7 @@ void setup(void){
 	#endif
 
 #if SupportTiltHydrometer
-	tiltReceiver.begin();
+	tiltListener.begin();
 #endif
 
 #if EanbleParasiteTempControl
@@ -1946,6 +2008,12 @@ void setup(void){
 	//mqtt
 	mqttRemoteControl.begin();
 #endif
+
+	#if EnableDHTSensorSupport
+	humidityControl.begin();
+	#endif
+
+
 }
 
 uint32_t _rssiReportTime;
@@ -2009,6 +2077,14 @@ void loop(void){
 	
 	#if SupportPressureTransducer
 	PressureMonitor.loop();
+	#endif
+	
+	#if SupportTiltHydrometer
+	tiltListener.loop();
+	#endif
+
+	#if EnableDHTSensorSupport
+	humidityControl.loop();
 	#endif
 
 	#if GreetingInMainLoop

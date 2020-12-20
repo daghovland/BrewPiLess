@@ -6,8 +6,12 @@
 #include "TemperatureFormats.h"
 #include "BrewPiProxy.h"
 #include "ExternalData.h"
+#include "BPLSettings.h"
 #if SupportPressureTransducer
 #include "PressureMonitor.h"
+#endif
+#if EnableDHTSensorSupport
+#include "HumidityControl.h"
 #endif
 extern BrewPiProxy brewPi;
 
@@ -66,11 +70,15 @@ size_t dataSprintf(char *buffer,const char *format,const char* invalid)
 				float sg=externalData.plato();
 				d += printFloat(buffer+d,sg,2,IsGravityValid(sg),invalid);
 			}
-			#if SupportPressureTransducer
 			else if(ch == 'P'){
+			#if SupportPressureTransducer
 				d += printFloat(buffer+d,PressureMonitor.currentPsi(),1,PressureMonitor.isCurrentPsiValid(),invalid);
-			}
+			#else
+		        strcpy(buffer+d,invalid);
+        		d+= strlen(invalid);
 			#endif
+
+			}
 			else if(ch == 'v'){
 				float vol=externalData.deviceVoltage();
 				d += printFloat(buffer+d,vol,1,IsVoltageValid(vol),invalid);
@@ -97,9 +105,19 @@ size_t dataSprintf(char *buffer,const char *format,const char* invalid)
 			}else if(ch == 's'){
 				*(buffer+d)= '0' + state;
 				d++;
-			}else{
+			}else if(ch == 'H'){
+				strcpy(buffer+d,theSettings.systemConfiguration()->hostnetworkname);
+				d += strlen(theSettings.systemConfiguration()->hostnetworkname);
+			}else if(ch == 'h'){
+				#if EnableDHTSensorSupport
+				 d += printFloat(buffer+d,(float)humidityControl.humidity(),0,humidityControl.isHumidityValid(),invalid);
+				#else
+		        strcpy(buffer+d,invalid);
+        		d+= strlen(invalid);
+				#endif
+			}else{				
 				// wrong format
-				return 0;
+				//return 0; ignored
 			}
 		}else{
 			buffer[d++]=ch;
@@ -173,6 +191,11 @@ size_t nonNullJson(char* buffer,size_t size)
 	#if SupportPressureTransducer
 	if(PressureMonitor.isCurrentPsiValid()) root[KeyPressure]= PressureMonitor.currentPsi();
 	#endif
+
+	#if EnableDHTSensorSupport
+	if(humidityControl.isHumidityValid()) root[KeyHumidity] = humidityControl.humidity();
+	#endif
+
 	float sg=externalData.gravity();
 	if(IsGravityValid(sg)){
 		root[KeyGravity] = sg;

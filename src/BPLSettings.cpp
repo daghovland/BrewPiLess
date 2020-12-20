@@ -8,7 +8,11 @@
 #include <ESP8266WiFi.h>
 #elif defined(ESP32)
 #include <WiFi.h>
+#if UseLittleFS
+#include <LittleFS.h>
+#else
 #include <SPIFFS.h>
+#endif
 #include <rom/spi_flash.h>
 #endif
 
@@ -16,9 +20,10 @@
 #include "BPLSettings.h"
 #include "BrewLogger.h"
 
-BPLSettings theSettings;
 
-FS& FileSystem=SPIFFS;
+extern FS& FileSystem;
+
+BPLSettings theSettings;
 
 #define BPLSettingFileName "/bpl.cfg"
 
@@ -46,7 +51,7 @@ void BPLSettings::load()
 		 offsetof(Settings,remoteLogginInfo),offsetof(Settings,autoCapSettings),
 		 offsetof(Settings,parasiteTempControlSettings));
 
-	fs::File f = SPIFFS.open(BPLSettingFileName, "r");
+	fs::File f = FileSystem.open(BPLSettingFileName, "r");
 	if(!f){
 		setDefault();
 		return;
@@ -65,7 +70,7 @@ void BPLSettings::load()
 
 void BPLSettings::save()
 {
-	fs::File f = SPIFFS.open(BPLSettingFileName, "w");
+	fs::File f = FileSystem.open(BPLSettingFileName, "w");
     if(!f){
 		DBG_PRINTF("error open configuratoin file\n");
 		return;
@@ -90,6 +95,9 @@ void BPLSettings::setDefault(void)
 
 #if EanbleParasiteTempControl
     defaultParasiteTempControlSettings();
+#endif
+#if EnableDHTSensorSupport
+	defaultHumidityControlSettings();
 #endif
 }
 
@@ -218,6 +226,9 @@ String BPLSettings::jsonSystemConfiguration(void){
 #if ESP32
 	root[KeyFlashChipId]=g_rom_flashchip.device_id;
 	root[KeyFlashRealSize]=g_rom_flashchip.chip_size;
+	#if UseLittleFS
+	#error "ESP32 doesn't support LittleFS by default"
+	#endif
 	root[KeyFileSystemSize]=SPIFFS.totalBytes();
 #else
 	root[KeyFlashChipId]=ESP.getFlashChipId();
@@ -252,7 +263,7 @@ String BPLSettings::jsonSystemConfiguration(void){
 //***************************************************************
 // gravity device configuration
 
-#define KeyEnableiSpindel "ispindel"
+#define KeyGravityDeviceType "dev"
 #define KeyTempCorrection "tc"
 #define KeyCorrectionTemp "ctemp"
 #define KeyCalculateGravity "cbpl"
@@ -264,7 +275,9 @@ String BPLSettings::jsonSystemConfiguration(void){
 #define KeyStableGravityThreshold "stpt"
 #define KeyNumberCalPoints "npt"
 #define KeyUsePlato "plato"
-
+#define KeyTiltColor "color"
+#define KeyTiltCalibrationPoints "tcpts"
+#define KeyTiltCoefficients "tiltcoe"
  bool BPLSettings::dejsonGravityConfig(char* json)
 {
 		#if ARDUINOJSON_VERSION_MAJOR == 6
@@ -284,7 +297,7 @@ String BPLSettings::jsonSystemConfiguration(void){
 		}
         GravityDeviceConfiguration *gdc = &_data.gdc;
 
-		gdc->ispindelEnable=root[KeyEnableiSpindel];
+		gdc->gravityDeviceType=root[KeyGravityDeviceType];
 		gdc->ispindelTempCal = root[KeyTempCorrection];
 
 //		if(gdc->ispindelTempCal){
@@ -300,6 +313,25 @@ String BPLSettings::jsonSystemConfiguration(void){
         gdc->stableThreshold=root[KeyStableGravityThreshold];
 		gdc->numberCalPoints=root[KeyNumberCalPoints];
 		gdc->usePlato = root.containsKey(KeyUsePlato)? root[KeyUsePlato]:0;
+		
+
+		#if SupportTiltHydrometer
+		TiltConfiguration *tcfg = & _data.tiltConfiguration;
+		tcfg->tiltColor = root[KeyTiltColor];
+		
+		JsonArray calpts = root[KeyTiltCalibrationPoints].as<JsonArray>();
+		int i=0;
+		for(JsonVariant v : calpts) {
+			JsonArray point=v.as<JsonArray>();
+			tcfg->calibrationPoints[i].rawsg= point[0].as<int>();
+			tcfg->calibrationPoints[i].calsg= point[1].as<int>();
+			i++;
+		}
+		tcfg->numCalPoints = calpts.size();
+		JsonArray tcoe= root[KeyTiltCoefficients].as<JsonArray>();
+		for(i=0;i<4;i++) tcfg->coefficients[i] = tcoe[i];
+		#endif
+
 		// debug
 		#if SerialDebug
 		Serial.print("\nCoefficient:");
@@ -325,7 +357,7 @@ String BPLSettings::jsonGravityConfig(void){
 
         GravityDeviceConfiguration *gdc = &_data.gdc;
 
-		root[KeyEnableiSpindel] = gdc->ispindelEnable;
+		root[KeyGravityDeviceType] = gdc->gravityDeviceType;
 		root[KeyTempCorrection] = gdc->ispindelTempCal;
 
 		root[KeyCorrectionTemp] = gdc->ispindelCalibrationBaseTemp;
@@ -339,6 +371,21 @@ String BPLSettings::jsonGravityConfig(void){
 		root[KeyCoefficientA3]=gdc->ispindelCoefficients[3];
 		root[KeyNumberCalPoints] = gdc->numberCalPoints;
 		root[KeyUsePlato] = gdc->usePlato;
+
+		#if SupportTiltHydrometer
+		TiltConfiguration *tcfg = & _data.tiltConfiguration;
+
+		root[KeyTiltColor]	=	tcfg->tiltColor;
+		if(tcfg->numCalPoints > 0){
+			JsonArray points = root.createNestedArray(KeyTiltCalibrationPoints);
+			for(int i=0;i< tcfg->numCalPoints;i++){
+				JsonArray point= points.createNestedArray();
+				point.add(tcfg->calibrationPoints[i].rawsg);
+				point.add(tcfg->calibrationPoints[i].calsg);
+			}
+		}
+		#endif
+
 	 String ret;
 
 	#if ARDUINOJSON_VERSION_MAJOR == 6
@@ -353,14 +400,22 @@ void BPLSettings::defaultGravityConfig(void)
 {
 	GravityDeviceConfiguration *gdc = &_data.gdc;
 
-	//gdc->ispindelEnable=0;
+	//gdc->gravityDeviceType=GravityDeviceNone;
 	//gdc->ispindelTempCal =0;
 
 	//gdc->calculateGravity= 0;
     gdc->lpfBeta = 0.1;
     gdc->stableThreshold=1;
 	//gdc->numberCalPoints=0;
-	
+	#if SupportTiltHydrometer
+
+	TiltConfiguration *tc = & _data.tiltConfiguration;
+
+	tc->numCalPoints = 0;
+	tc->coefficients[0] = tc->coefficients[2] =  tc->coefficients[3] = 0.0; 
+	tc->coefficients[1] =  1.0;
+
+	#endif
 }
   
 //***************************************************************
@@ -1140,6 +1195,16 @@ bool BPLSettings::dejsonMqttRemoteControlSettings(String json){
 	#endif
 
 	return true;
+}
+
+#endif
+
+
+
+#if EnableDHTSensorSupport
+
+void BPLSettings::defaultHumidityControlSettings(void){
+
 }
 
 #endif

@@ -1,8 +1,12 @@
 #include <ArduinoJson.h>
 #include "ExternalData.h"
+#if SupportTiltHydrometer
+#include "TiltListener.h"
+#endif
 
 ExternalData externalData;
 
+#define TiltFilterParameter 0.15
 
 float Brix2SG(float brix){
  return (brix / (258.6-((brix / 258.2)*227.1))) + 1;
@@ -26,8 +30,13 @@ void ExternalData::waitFormula(){
 }
 
 bool ExternalData::iSpindelEnabled(void){
-    return _cfg->ispindelEnable;
+    return _cfg->gravityDeviceType == GravityDeviceIspindel;
 }
+
+bool ExternalData::gravityDeviceEnabled(void){
+    return _cfg->gravityDeviceType != GravityDeviceNone;
+}
+
 
 float ExternalData::hydrometerCalibration(void){ 
     return _cfg->ispindelCalibrationBaseTemp;
@@ -51,11 +60,12 @@ void ExternalData::sseNotify(char *buf){
 		len=sprintFloat(strtilt,_ispindelTilt,2);
 		strtilt[len]='\0';
 
-		char coeff[4][20];
+/*		char coeff[4][20];
 		for(int i=0;i<4;i++){
 			len=sprintFloat(coeff[i],_cfg->ispindelCoefficients[i],9);
 			coeff[i][len]='\0';	
 		}
+		*/
 		char strRssi[32];
 		if(_rssiValid){
 			len=sprintf(strRssi,",\"rssi\":%d",_rssi);
@@ -64,30 +74,87 @@ void ExternalData::sseNotify(char *buf){
 			strRssi[1]=' ';
 			strRssi[0]='\0';
 		} 
+		
+		#if SupportTiltHydrometer
+		char strRawTilt[8];
+		len=sprintFloat(strRawTilt,_tiltRawGravity,3);
+		strRawTilt[len]='\0';
+		#else
+		char *strRawTilt ="0";
+		#endif
+
 		const char *spname=(_ispindelName)? _ispindelName:"Unknown";
-		sprintf(buf,"G:{\"name\":\"%s\",\"battery\":%s,\"sg\":%s,\"angle\":%s %s,\"lu\":%ld,\"lpf\":%s,\"stpt\":%d,\"fpt\":%d,\"ctemp\":%d,\"plato\":%d}",
+		sprintf(buf,"G:{\"dev\":%d,\"name\":\"%s\",\"battery\":%s,\"sg\":%s,\"angle\":%s %s,\"lu\":%ld,\"lpf\":%s,\"stpt\":%d,\"fpt\":%d,\"ctemp\":%d,\"plato\":%d,\"tiltraw\":%s}",
+					_cfg->gravityDeviceType,
 					spname, 
 					strbattery,
 					strgravity,
 					strtilt,
 					strRssi,
-					_lastUpdate,slowpassfilter,_cfg->stableThreshold,
+					_lastUpdate,
+					slowpassfilter,
+					_cfg->stableThreshold,
 					_cfg->numberCalPoints,
                     _cfg->ispindelCalibrationBaseTemp,
-					_cfg->usePlato);
+					_cfg->usePlato,
+					strRawTilt);
 }
 
+#if SupportTiltHydrometer
+void ExternalData::setTiltInfo(uint16_t gravity, uint16_t temperature, int rssi){
+	_tiltRawGravity = gravity;
+	float sg =(float) gravity /1000.0;
+	float csg = _tcfg->coefficients[0] 
+			 +  _tcfg->coefficients[1] * sg 
+			 +  _tcfg->coefficients[2] * sg * sg
+			 +  _tcfg->coefficients[3] * sg * sg * sg; 
+
+
+	setAuxTemperatureCelsius( ((float)temperature  -32.0)* 5.0/9.0);
+	setDeviceRssi(rssi);
+	setGravity(csg, TimeKeeper.getTimeSeconds());
+}
+#endif
+
+void ExternalData::reconfig(void){
+
+	#if SupportTiltHydrometer
+	if(_cfg->gravityDeviceType != GravityDeviceTilt) tiltListener.stopListen();
+	#endif
+
+	if(_cfg->gravityDeviceType == GravityDeviceIspindel){	    
+		filter.setBeta(_cfg->lpfBeta);		
+	}
+	#if SupportTiltHydrometer
+	else if(_cfg->gravityDeviceType == GravityDeviceTilt){
+	    filter.setBeta(TiltFilterParameter);
+		tiltListener.listen((TiltColor) _tcfg->tiltColor,[&](TiltHydrometerInfo& info){
+			setTiltInfo(info.gravity,info.temperature,info.rssi);
+		});
+	}
+	#endif
+}
 
 void ExternalData::loadConfig(void){
     _cfg = theSettings.GravityConfig();
-    filter.setBeta(_cfg->lpfBeta);
+#if SupportTiltHydrometer	
+	_tcfg = theSettings.tiltConfiguration();
+#endif
+	reconfig();
 }
 
 
 bool ExternalData::processconfig(char* configdata){
    bool ret= theSettings.dejsonGravityConfig(configdata);
    if(ret){
+	   #if !SupportTiltHydrometer
+	   if(_cfg->gravityDeviceType == GravityDeviceTilt){
+		   return false;
+	   }
+	   #endif
+
 	   theSettings.save();
+	   reconfig();
    }
    return ret;
 }
@@ -113,7 +180,7 @@ void ExternalData::setOriginalGravity(float og){
 #endif
 }
 
-void ExternalData::setTilt(float tilt,float temp,time_t now){
+void ExternalData::setIspindelAngle(float tilt,float temp,time_t now){
 	_lastUpdate=now;
 	_ispindelTilt=tilt;
 
@@ -276,7 +343,7 @@ bool ExternalData::processGravityReport(char data[],size_t length, bool authenti
 			return false;
 		}
     	
-        setTilt(root["angle"],itemp,TimeKeeper.getTimeSeconds());
+        setIspindelAngle(root["angle"],itemp,TimeKeeper.getTimeSeconds());
 
         if(root.containsKey("battery"))
     	    setDeviceVoltage(root["battery"]);

@@ -1,7 +1,12 @@
 #include "BrewPiProxy.h"
+#include "Config.h"
 #include "BrewLogger.h"
 #if SupportPressureTransducer
 #include "PressureMonitor.h"
+#endif
+
+#if EnableDHTSensorSupport
+#include "HumidityControl.h"
 #endif
 
 #define LoggingPeriod 60000  //in ms
@@ -17,6 +22,11 @@ BrewLogger::BrewLogger(void){
 	_calibrating=false;
 	_lastPressureReading = INVALID_PRESSURE_INT;
 	_targetPsi =0;
+
+#if EnableDHTSensorSupport
+	_lastHumidity = INVALID_HUMIDITY_VALUE;
+	_lastHumidityTarget = INVALID_HUMIDITY_VALUE;
+#endif
 }
 
 	
@@ -47,7 +57,7 @@ BrewLogger::BrewLogger(void){
 			+"}";
 #else
 		FSInfo fs_info;
-		SPIFFS.info(fs_info);
+		FileSystem.info(fs_info);
 		String ret=String("{\"size\":") + String(fs_info.totalBytes)
 			+",\"used\":"  + String(fs_info.usedBytes)
 			+",\"block\":" + String(fs_info.blockSize)
@@ -98,7 +108,7 @@ BrewLogger::BrewLogger(void){
 		// multiple access issue
 		char buff[36];
 		sprintf(buff,"%s/%s",LOG_PATH,_pFileInfo->files[index].name);
-		SPIFFS.remove(buff);
+		FileSystem.remove(buff);
 		DBG_PRINTF("remove %d: %s\n",index,buff);
 		int i;
 		for(i=index+1;i<MAX_LOG_FILE_NUMBER;i++){
@@ -122,9 +132,9 @@ BrewLogger::BrewLogger(void){
 		sprintf(filename,"%s/%s",LOG_PATH,_pFileInfo->logname);
 #if ESP32
 		// weird behavior of ESP32
-		_logFile=SPIFFS.open(filename,"r");
+		_logFile=FileSystem.open(filename,"r");
 #else
-		_logFile=SPIFFS.open(filename,"a+");
+		_logFile=FileSystem.open(filename,"a+");
 #endif
 		if(! _logFile){
             DBG_PRINTF("resume failed\n");
@@ -227,7 +237,7 @@ BrewLogger::BrewLogger(void){
 						break;
 					}
 					processIndex +=2;
-				}else if(tag == StateTag  || tag == ModeTag  || tag ==CorrectionTempTag ||tag == TargetPsiTag){
+				}else if(tag == StateTag  || tag == ModeTag  || tag ==CorrectionTempTag ||tag == TargetPsiTag || tag==HumidityTag){
 					// DO nothing.
 				}else if(tag == TimeSyncTag){
 					if (dataRead-processIndex<4 ){
@@ -274,7 +284,7 @@ BrewLogger::BrewLogger(void){
 		//DBG_PRINTF("resume done _savedLength:%d, _logIndex:%d\n",_savedLength,_logIndex);
 #if ESP32
 		_logFile.close();
-		_logFile=SPIFFS.open(filename,"a+");
+		_logFile=FileSystem.open(filename,"a+");
 		if(! _logFile){
             DBG_PRINTF("resume failed\n");
             return false;
@@ -293,7 +303,7 @@ BrewLogger::BrewLogger(void){
 		char buff[36];
 		sprintf(buff,"%s/%s",LOG_PATH,filename);
 
-		_logFile=SPIFFS.open(buff,"a+");
+		_logFile=FileSystem.open(buff,"a+");
 
 		if(!_logFile){
 			DBG_PRINTF("Error open temp file\n");
@@ -321,6 +331,15 @@ BrewLogger::BrewLogger(void){
 		_addModeRecord(_mode);
 		_addStateRecord(_state);
 
+		#if EnableDHTSensorSupport
+		if(humidityControl.sensorInstalled()){
+			uint8_t humidity = humidityControl.humidity();
+			_lastHumidity=humidity;
+			_addHumidityRecord(humidity);
+		}
+		#endif
+
+
 		_saveIdxFile();
 		// flush to force write to file system.
 		_logFile.flush();
@@ -330,6 +349,7 @@ BrewLogger::BrewLogger(void){
 	void BrewLogger::endSession(void){
 		if(!_recording) return;
 		_recording=false;
+		_calibrating=false;
 		_logFile.close();
 		// copy the file name into last entry
 		int index=0;
@@ -501,6 +521,22 @@ BrewLogger::BrewLogger(void){
 		if(psi != _targetPsi){
 			_targetPsi = psi;
 			_addTargetPsiRecord();
+		}
+		#endif
+
+		#if EnableDHTSensorSupport
+		if(humidityControl.sensorInstalled()){
+			// To save memory, only log when data changes.
+			uint8_t humidity = humidityControl.humidity();
+			if(_lastHumidity !=humidity){
+				_lastHumidity=humidity;
+				_addHumidityRecord(humidity);
+			}
+			uint8_t target = humidityControl.targetRH();
+			if(_lastHumidityTarget !=target){
+				_lastHumidityTarget =target;
+				_addHumidityTargetRecord(target);
+			}
 		}
 		#endif
 	}
@@ -723,6 +759,9 @@ BrewLogger::BrewLogger(void){
 		_extGravity=INVALID_GRAVITY_INT;
 		_extOriginGravity=INVALID_GRAVITY_INT;
 		_extTileAngle = INVALID_TILT_ANGLE;
+		#if EnableDHTSensorSupport
+		_savedHumidityValue = 0xFF;
+		#endif
 	}
 
 #define RESERVED_SIZE 8196*2
@@ -740,7 +779,7 @@ BrewLogger::BrewLogger(void){
 
 #else
 		FSInfo fs_info;
-		SPIFFS.info(fs_info);
+		FileSystem.info(fs_info);
 
 		_fsspace = fs_info.totalBytes - fs_info.usedBytes;
 		if(_fsspace > fs_info.blockSize * 2){
@@ -749,7 +788,7 @@ BrewLogger::BrewLogger(void){
 			_fsspace=0;
 		}
 #endif
-		DBG_PRINTF("SPIFFS space:%d\n",_fsspace);
+		DBG_PRINTF("FileSystem space:%d\n",_fsspace);
 	}
 
 	void BrewLogger::_volatileHeader(char *buf)
@@ -791,6 +830,14 @@ BrewLogger::BrewLogger(void){
 		*ptr++ = state;  // 14 + VolatileDataHeaderSize*2
 		*ptr++ = TargetPsiTag; //15		
 		*ptr++ = _targetPsi;  // 16
+
+		#if EnableDHTSensorSupport
+
+		// to simplify, just let deocoder ignore invalid dataset
+		// 
+		*ptr++ = HumidityTag; //17		
+		*ptr++ = _savedHumidityValue;  // 18
+		#endif
  	}
 	void BrewLogger::_startLog(bool fahrenheit,bool calibrating)
 	{
@@ -917,6 +964,13 @@ BrewLogger::BrewLogger(void){
 				idx +=4;
 				dataDrop +=4;
 			}else{
+
+				#if EnableDHTSensorSupport
+				if(HumidityTag ==  _logBuffer[idx]){
+					_savedHumidityValue = _logBuffer[idx+1];
+				}
+				#endif
+
 				idx +=2;
 				dataDrop +=2;
 			}
@@ -975,7 +1029,7 @@ BrewLogger::BrewLogger(void){
 
 	void BrewLogger::_commitData(int idx,int len)
 	{
-		//WARNNING: we are relying on the write cache of SPIFFS
+		//WARNNING: we are relying on the write cache of FileSystem
 		 _logIndex += len;
 
 		if(!_recording){
@@ -1004,7 +1058,7 @@ BrewLogger::BrewLogger(void){
 			char buff[36];
 			sprintf(buff,"%s/%s",LOG_PATH,_pFileInfo->logname);
 
-			_logFile=SPIFFS.open(buff,"a+");
+			_logFile=FileSystem.open(buff,"a+");
 			_logFile.write((const uint8_t*)buf+wlen,len-wlen);
 		}*/
 
@@ -1052,6 +1106,25 @@ BrewLogger::BrewLogger(void){
 		_writeBuffer(idx+1,_targetPsi); //*(ptr+1) = mode;
 		_commitData(idx,2);
 	}
+
+#if EnableDHTSensorSupport	
+	void BrewLogger::_addHumidityRecord(uint8_t humidity){
+		int idx = _allocByte(2);
+		if(idx < 0) return;
+		_writeBuffer(idx,HumidityTag); //*ptr = TargetPsiTag;
+		_writeBuffer(idx+1,humidity); //*(ptr+1) = mode;
+		_commitData(idx,2);
+	}
+
+	void BrewLogger::_addHumidityTargetRecord(uint8_t target){
+		int idx = _allocByte(2);
+		if(idx < 0) return;
+		_writeBuffer(idx,HumiditySetTag); //*ptr = TargetPsiTag;
+		_writeBuffer(idx+1,target); //*(ptr+1) = mode;
+		_commitData(idx,2);
+	}
+
+#endif
 
 	void BrewLogger::_addStateRecord(char state){
 		int idx = _allocByte(2);

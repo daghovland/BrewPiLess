@@ -3,12 +3,12 @@
 #include <ESP8266WiFi.h>
 #include <WiFiClientSecure.h>
 #include <ESP8266HTTPClient.h>
-
+//#include <WiFiClientSecureBearSSL.h>
 #elif defined(ESP32)
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <AsyncTCP.h>
-
+#include <WiFiClientSecure.h>
 #endif
 
 #include <ESPAsyncWebServer.h>
@@ -41,7 +41,7 @@ void DataLogger::loop(time_t now)
 }
 
 
-#define BUFFERSIZE 512
+#define BUFFERSIZE 1024
 
 void DataLogger::sendData(void)
 {
@@ -68,17 +68,34 @@ void DataLogger::sendData(void)
 	DBG_PRINTF("data= %d, \"%s\"\n",len,data);
 
 	int code;
-	WiFiClient wifiClient;
+//	WiFiClient *pClient;
+
 	HTTPClient _http;
   	_http.setUserAgent(F("ESP8266"));
+#if ESP32	
+	WiFiClient wClient;
+	WiFiClientSecure sClient;
+	bool https=false;
+
+	if( strncasecmp(_loggingInfo->url,"https",5) ==0){
+//		sClient.setBufferSizes(1024, 1024);
+//		sClient.setInsecure();
+		https=true;
+	}	
+#else
+	WiFiClient wClient;
+#endif
 
 	DBG_PRINTF("[HTTP] %d...\n",_loggingInfo->method);
 	DBG_PRINTF("Content-Type:\"%s\"\n", _loggingInfo->contentType);
 	if(_loggingInfo->method == mHTTP_POST
 		|| _loggingInfo->method== mHTTP_PUT ){
 		// post
-
-		_http.begin(wifiClient,_loggingInfo->url);
+		#if ESP32	
+		if(https) _http.begin(sClient,_loggingInfo->url);
+		else 
+		#endif
+		_http.begin(wClient,_loggingInfo->url);
 
  		if(_loggingInfo->contentType){
   			_http.addHeader("Content-Type", _loggingInfo->contentType);
@@ -88,7 +105,11 @@ void DataLogger::sendData(void)
     // start connection and send HTTP header
     	code = _http.sendRequest((_loggingInfo->method == mHTTP_POST)? "POST":"PUT",(uint8_t*)data,len);
     }else{
- 			_http.begin(wifiClient,String(_loggingInfo->url) + String("?") + String(data));
+		#if ESP32	
+		if(https) _http.begin(sClient,String(_loggingInfo->url) + String("?") + String(data));
+		else
+		#endif
+ 		_http.begin(wClient,String(_loggingInfo->url) + String("?") + String(data));
     	code = _http.GET();
     }
 
@@ -107,7 +128,8 @@ void DataLogger::sendData(void)
     }else{
       DBG_PRINTF("error, unhandled code:%d",code);
     }
-    String output=_http.getString();
-    DBG_PRINTF("output:\n%s\n",output.c_str());
+//    String output=_http.getString();
+//    DBG_PRINTF("output:\n%s\n",output.c_str());
 	_http.end();
+	//delete pClient;
 }
